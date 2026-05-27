@@ -1,0 +1,40 @@
+# local-recorder configuration. Copy to config.local.yaml to override (gitignored).
+
+# Where per-meeting transcript folders are written.
+output_dir: ~/recordings
+
+# Keep the mixed WAV after transcription. Transcript is the required artifact,
+# so default is to delete audio once the transcript is produced.
+keep_audio: false
+
+# Unix socket the daemon listens on; the native-messaging host relays to it.
+socket_path: ~/.local/share/local-recorder/daemon.sock
+
+# Log file for the daemon.
+log_file: ~/.local/share/local-recorder/daemon.log
+
+audio:
+  sample_rate: 16000
+  # ffmpeg pulse device names. @DEFAULT_MONITOR@ = whatever the default sink
+  # plays (remote participants); @DEFAULT_SOURCE@ = the microphone (you).
+  # Works through PipeWire's pulse compatibility layer; no pactl required.
+  monitor_device: "@DEFAULT_MONITOR@"
+  mic_device: "@DEFAULT_SOURCE@"
+
+whisper:
+  # Model used when a CUDA GPU is detected.
+  gpu_model: large-v3
+  compute_type_gpu: float16
+  # Fallback model when running on CPU (smaller/faster, still good quality).
+  cpu_model: distil-large-v3
+  compute_type_cpu: int8
+  batch_size: 16
+  # null = autodetect language from audio.
+  language: null
+
+align:
+  # Seconds that live captions typically lag the spoken audio. Caption
+  # timestamps are shifted earlier by this amount before alignment.
+  caption_latency: 1.5
+  # Max seconds of slack when matching a Whisper segment to a caption turn.
+  tolerance: 2.0

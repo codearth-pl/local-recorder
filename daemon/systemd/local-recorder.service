@@ -1,0 +1,17 @@
+# Install:  cp this to ~/.config/systemd/user/  (edit paths below first)
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now local-recorder
+# Logs:  journalctl --user -u local-recorder -f
+[Unit]
+Description=local-recorder daemon (Meet/Teams transcript recorder)
+After=pipewire.service
+
+[Service]
+# Adjust WorkingDirectory to your checkout, and the python path to your venv.
+WorkingDirectory=%h/www/lab/local-recorder
+ExecStart=%h/www/lab/local-recorder/.venv/bin/python -m daemon.daemon
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

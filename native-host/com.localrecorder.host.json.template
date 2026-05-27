@@ -1,0 +1,9 @@
+{
+  "name": "com.localrecorder.host",
+  "description": "local-recorder native messaging host: relays Meet/Teams captions to the local daemon",
+  "path": "__HOST_PATH__",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://__EXTENSION_ID__/"
+  ]
+}

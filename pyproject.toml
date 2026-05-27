@@ -1,0 +1,28 @@
+[project]
+name = "local-recorder"
+version = "0.1.0"
+description = "Fully local, invisible Google Meet / Microsoft Teams recorder producing speaker-attributed transcripts"
+requires-python = ">=3.10"
+dependencies = [
+    "PyYAML>=6.0",
+]
+
+# Heavy ML deps live in an optional group so the daemon + caption-only MVP
+# can run without pulling torch/whisperx. Install with: uv sync --extra whisper
+[project.optional-dependencies]
+whisper = [
+    "whisperx>=3.1.1",
+    "torch>=2.0",
+    "torchaudio>=2.0",
+    "ctranslate2>=4.0",
+]
+
+[project.scripts]
+local-recorder = "daemon.daemon:main"
+
+[tool.setuptools]
+packages = ["daemon"]
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"

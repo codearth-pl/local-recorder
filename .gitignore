@@ -1,0 +1,18 @@
+# Recorded artifacts (transcripts + any retained audio)
+recordings/
+*.wav
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Local runtime state
+*.sock
+*.log
+
+# Local overrides
+daemon/config.local.yaml

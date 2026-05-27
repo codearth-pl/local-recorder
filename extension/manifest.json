@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "Local Recorder (Meet/Teams transcripts)",
+  "version": "0.1.0",
+  "description": "Captures Google Meet / Microsoft Teams live captions locally and relays them to the local-recorder daemon. No bot joins the call.",
+  "permissions": ["nativeMessaging", "storage"],
+  "host_permissions": [
+    "https://meet.google.com/*",
+    "https://teams.microsoft.com/*",
+    "https://*.teams.microsoft.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://meet.google.com/*"],
+      "js": ["content/captions-core.js", "content/meet.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://teams.microsoft.com/*", "https://*.teams.microsoft.com/*"],
+      "js": ["content/captions-core.js", "content/teams.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "Local Recorder"
+  }
+}
