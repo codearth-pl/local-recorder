@@ -56,14 +56,14 @@ def write_srt(path: Path, blocks: list[dict]) -> None:
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
-def write_all(out_dir: Path, blocks: list[dict], meta: dict) -> dict:
-    """Write all three formats; return a map of format -> path."""
-    out_dir.mkdir(parents=True, exist_ok=True)
+def write_all(out_root: Path, base: str, blocks: list[dict], meta: dict) -> dict:
+    """Write all three formats as <base>.<ext> in out_root; return format -> path."""
+    out_root.mkdir(parents=True, exist_ok=True)
     meta = {**meta, "generated_at": datetime.now().astimezone().isoformat()}
     paths = {
-        "md": out_dir / "transcript.md",
-        "json": out_dir / "transcript.json",
-        "srt": out_dir / "transcript.srt",
+        "md": out_root / f"{base}.md",
+        "json": out_root / f"{base}.json",
+        "srt": out_root / f"{base}.srt",
     }
     write_markdown(paths["md"], blocks, meta)
     write_json(paths["json"], blocks, meta)

@@ -83,12 +83,12 @@ def test_captions_only_flow(tmp_path, monkeypatch):
     out_root = Path(cfg["output_dir"])
     md = None
     for _ in range(100):
-        files = list(out_root.glob("*/transcript.md"))
+        files = list(out_root.glob("*.md"))
         if files:
             md = files[0]
             break
         time.sleep(0.05)
-    assert md is not None, "transcript.md was not written"
+    assert md is not None, "transcript .md was not written"
     text = md.read_text()
     assert "Alice" in text and "Bob" in text
     assert "hello team" in text

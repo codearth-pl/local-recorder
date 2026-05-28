@@ -22,7 +22,13 @@ _DEFAULTS: dict = {
         "cpu_model": "distil-large-v3",
         "compute_type_cpu": "int8",
         "batch_size": 16,
+        # Single forced language (e.g. "en"); when set it wins and disables
+        # multi-language detection. Leave None to use `languages` below.
         "language": None,
+        # Candidate languages for per-window detection within one meeting
+        # (meetings here open in Polish then switch to English). Overridable at
+        # daemon startup via `--languages pl,en`. Empty/None => fully automatic.
+        "languages": ["pl", "en"],
     },
     "align": {
         "caption_latency": 1.5,

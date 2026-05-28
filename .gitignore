@@ -16,3 +16,5 @@ venv/
 
 # Local overrides
 daemon/config.local.yaml
+.local-recorder.conf
+.env

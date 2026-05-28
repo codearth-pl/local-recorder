@@ -15,15 +15,19 @@ responsive.
 """
 from __future__ import annotations
 
+import argparse
 import json
 import logging
 import os
+import re
 import socket
 import threading
 from pathlib import Path
 
 from .config import load_config
 from .session import Session
+
+_LANG_CODE = re.compile(r"^[a-z]{2}$")
 
 
 def _setup_logging(log_file: Path) -> None:
@@ -148,9 +152,32 @@ class Daemon:
                 self.socket_path.unlink()
 
 
+def _parse_languages(value: str) -> list[str]:
+    """Parse a comma-separated list of two-letter language codes (e.g. "pl,en")."""
+    codes = [c.strip().lower() for c in value.split(",") if c.strip()]
+    if not codes or not all(_LANG_CODE.match(c) for c in codes):
+        raise argparse.ArgumentTypeError(
+            f"expected comma-separated two-letter codes (e.g. pl,en), got {value!r}"
+        )
+    return codes
+
+
 def main() -> None:
+    parser = argparse.ArgumentParser(prog="local-recorder")
+    parser.add_argument(
+        "--languages",
+        type=_parse_languages,
+        metavar="pl,en",
+        help="candidate languages for per-window detection (comma-separated "
+        "two-letter codes); overrides whisper.languages",
+    )
+    args = parser.parse_args()
+
     cfg = load_config()
+    if args.languages:
+        cfg["whisper"]["languages"] = args.languages
     _setup_logging(Path(cfg["log_file"]).expanduser())
+    log.info("whisper languages: %s", cfg["whisper"].get("languages") or "auto")
     Daemon(cfg).run()
 
 

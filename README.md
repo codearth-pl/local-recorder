@@ -17,7 +17,7 @@ Three local pieces, no cloud:
 
 ```
 extension (Meet/Teams captions) ──▶ native-host/host.py ──▶ daemon (audio + Whisper + align)
-                                                                      └─▶ ~/recordings/<meeting>/transcript.md
+                                                                      └─▶ ~/recordings/<meeting>.md
 ```
 
 If audio/Whisper is unavailable, it falls back to a **captions-only** transcript that still
@@ -32,6 +32,25 @@ has real speaker names.
 - Optional but recommended: an NVIDIA GPU for fast `large-v3` transcription.
 
 ## Setup
+
+### Quick start (one command)
+
+Once you have the extension's ID (see step 2 below), copy the env template and start everything:
+
+```bash
+cp .env.example .env        # then set EXTENSION_ID=... (and BROWSER / LANGUAGES if needed)
+./start.sh                  # venv + deps + native host + browser + daemon
+```
+
+`start.sh` reads config from `.env`, falling back to the cached `.local-recorder.conf`. Flags
+override `.env` for a single run:
+
+```bash
+./start.sh --extension-id <ID> --browser chrome --languages pl,en
+```
+
+Precedence (highest first): **CLI flags > `.env` > `.local-recorder.conf` > defaults**. The
+manual steps below are equivalent if you'd rather wire things up yourself.
 
 ### 1. Python environment
 
@@ -60,6 +79,9 @@ This writes the host manifest into the browser's `NativeMessagingHosts/` dir, po
 
 ```bash
 .venv/bin/python -m daemon.daemon
+
+# Override the candidate languages for a meeting (default: pl,en):
+.venv/bin/python -m daemon.daemon --languages pl,en
 ```
 
 Or install it as a user service (edit paths in the unit first):
@@ -78,9 +100,10 @@ journalctl --user -u local-recorder -f
    tries to auto-enable Meet captions; Teams captions you may need to enable manually under
    More (…) → Language and speech → Turn on live captions).
 3. Talk. When you leave the call, the daemon transcribes and writes:
-   `~/recordings/<timestamp>-<title>/transcript.md` (also `.json` and `.srt`).
+   `~/recordings/<timestamp>-<title>.md` (also `.json` and `.srt`).
 
-Audio is deleted after transcription unless you set `keep_audio: true` in `daemon/config.yaml`.
+Audio (the temporary `.wav` beside those files) is deleted after transcription unless you set
+`keep_audio: true` in `daemon/config.yaml`.
 
 ## Configuration
 
@@ -88,6 +111,11 @@ Edit `daemon/config.yaml` (or copy to `config.local.yaml`, which is gitignored):
 
 - `output_dir`, `keep_audio`
 - `whisper.*` — models and compute types for GPU/CPU
+- `whisper.languages` — candidate languages, detected **per ~30 s window** (default `[pl, en]`).
+  Meetings that open in Polish and switch to English are transcribed correctly instead of
+  being locked to whichever language was spoken first. Override at startup with
+  `--languages pl,en`. Set `whisper.language` to a single code to force one language and skip
+  detection.
 - `align.caption_latency` — how far captions lag speech (default 1.5 s); tune if names look
   shifted relative to text
 - `align.tolerance` — slack when matching a segment to a speaker turn

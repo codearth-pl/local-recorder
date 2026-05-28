@@ -35,12 +35,12 @@ class Session:
             "started_at": started.isoformat(),
         }
 
-        out_root = Path(cfg["output_dir"]).expanduser()
+        self.out_root = Path(cfg["output_dir"]).expanduser()
+        self.out_root.mkdir(parents=True, exist_ok=True)
         stamp = started.strftime("%Y-%m-%dT%H-%M-%S")
-        self.out_dir = out_root / f"{stamp}-{_slug(self.meta['title'])}"
-        self.out_dir.mkdir(parents=True, exist_ok=True)
+        self.base = f"{stamp}-{_slug(self.meta['title'])}"
 
-        self.audio_path = self.out_dir / "audio.wav"
+        self.audio_path = self.out_root / f"{self.base}.wav"
         self.recorder = AudioRecorder(self.audio_path, cfg["audio"])
         try:
             self.recorder.start()
@@ -91,7 +91,7 @@ class Session:
             blocks = align.captions_only_transcript(self.captions, self.start_epoch)
             self.meta.setdefault("source", "captions-only")
 
-        paths = output.write_all(self.out_dir, blocks, self.meta)
+        paths = output.write_all(self.out_root, self.base, blocks, self.meta)
 
         if wav is not None and not self.cfg.get("keep_audio", False):
             try:
