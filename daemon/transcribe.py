@@ -1,30 +1,57 @@
-"""WhisperX transcription with word-level timestamps and per-window language switching.
+"""WhisperX transcription with word-level timestamps and dominant-language detection.
 
 GPU-first (CUDA -> large-v3/float16), CPU fallback (-> distil-large-v3/int8).
 We deliberately do NOT run WhisperX's pyannote diarization: speaker names come
 from the caption stream (see align.py), which is more reliable than acoustic
 clustering and gives real names instead of SPEAKER_00.
 
-WhisperX detects language only once (first 30s) and applies it to the whole file.
-Meetings here open in Polish and switch to English, so instead we detect language
-on ~30s windows (constrained to a candidate allowlist, default pl+en), group
-consecutive same-language windows into spans, transcribe each span in its own
-language, align it with that language's model, and concatenate. Downstream
-(align.py) only uses segment start/end/text, so the result is the same shape.
+WhisperX is a one-language-per-file model: it detects language once (first 30s)
+and applies it to the whole recording. Meetings here mix Polish and English, so
+instead of trusting that single first-30s guess we sample the whole file in ~30s
+windows, detect each window's language constrained to a candidate allowlist
+(default pl+en), and transcribe the file once in the majority ("dominant")
+language. A forced `whisper.language` overrides detection entirely. We do NOT
+split the file per language: per-span passes fragmented utterances and hurt both
+word accuracy and the alignment timestamps that drive speaker attribution.
 
 whisperx/torch are imported lazily so the daemon and the caption-only path can
 run without the heavy ML stack installed.
 """
 from __future__ import annotations
 
+import gc
 import logging
 import math
+from collections import Counter
 
 log = logging.getLogger("local-recorder.transcribe")
 
 # Granularity of language detection. Switches happen at utterance boundaries, so
 # 30s windows are plenty to catch a Polish -> English transition (and back).
 WINDOW_S = 30
+
+
+def _is_oom(exc: Exception) -> bool:
+    """True for a CUDA/host out-of-memory error.
+
+    Covers ctranslate2's `RuntimeError("CUDA failed with error out of memory")`
+    and torch's `OutOfMemoryError` (itself a RuntimeError subclass).
+    """
+    return "out of memory" in str(exc).lower() or type(exc).__name__ == "OutOfMemoryError"
+
+
+def _attempt_plan(device: str, gpu_batch: int, cpu_batch: int) -> list[tuple[str, int]]:
+    """Ordered (device, batch_size) attempts, shrinking batch then dropping to CPU.
+
+    An OOM on a long-lived daemon's nth meeting is recoverable: free the GPU and
+    retry smaller, finally on CPU, before giving up to a captions-only transcript.
+    """
+    if device != "cuda":
+        return [("cpu", cpu_batch)]
+    seen: set[int] = set()
+    batches = [b for b in (gpu_batch, gpu_batch // 2, max(1, gpu_batch // 4)) if b >= 1]
+    cuda = [b for b in batches if not (b in seen or seen.add(b))]
+    return [("cuda", b) for b in cuda] + [("cpu", cpu_batch)]
 
 
 def detect_device() -> str:
@@ -54,29 +81,16 @@ def _resolve_languages(whisper_cfg: dict) -> list[str] | None:
     return [str(lang) for lang in langs]
 
 
-def _group_language_spans(
-    window_langs: list[str], window_s: float, total_s: float
-) -> list[tuple[float, float, str]]:
-    """Collapse a per-window language list into contiguous (start, end, lang) spans."""
-    spans: list[tuple[float, float, str]] = []
-    for i, lang in enumerate(window_langs):
-        start = i * window_s
-        end = min((i + 1) * window_s, total_s)
-        if end <= start:
-            continue
-        if spans and spans[-1][2] == lang:
-            spans[-1] = (spans[-1][0], end, lang)
-        else:
-            spans.append((start, end, lang))
-    return spans
+def _dominant_language(window_langs: list[str], fallback: str) -> str:
+    """Majority-vote the per-window detections into one language for the whole file.
 
-
-def _offset_segments(segments: list[dict], dt: float) -> list[dict]:
-    """Shift span-local segment times back to recording-relative seconds."""
-    return [
-        {**s, "start": float(s["start"]) + dt, "end": float(s["end"]) + dt}
-        for s in segments
-    ]
+    Ties are broken by first appearance (Counter preserves insertion order for
+    equal counts), so the result is deterministic. An empty list (no windows)
+    yields `fallback`.
+    """
+    if not window_langs:
+        return fallback
+    return Counter(window_langs).most_common(1)[0][0]
 
 
 def _detect_language(model, audio_window, allowed: list[str] | None) -> str:
@@ -102,12 +116,110 @@ def _detect_language(model, audio_window, allowed: list[str] | None) -> str:
     return ranked[0][0][2:-2]
 
 
+def _free_gpu(device: str) -> None:
+    """Reclaim GPU memory after a transcription attempt.
+
+    The daemon is long-lived, so models from a finished meeting must not linger:
+    `gc.collect()` breaks the reference cycles that otherwise pin the ctranslate2
+    and align models until the next automatic GC, and `empty_cache()` returns
+    torch's reserved blocks to the driver. Without this, footprint accumulates
+    across meetings and a later finalize OOMs even though one meeting fits.
+    """
+    gc.collect()
+    if device == "cuda":
+        try:
+            import torch
+
+            torch.cuda.empty_cache()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _run(whisperx, sample_rate: int, audio, whisper_cfg: dict,
+         device: str, batch_size: int) -> list[dict]:
+    """One transcription attempt on `device`. Always frees the GPU before returning."""
+    if device == "cuda":
+        model_name = whisper_cfg.get("gpu_model", "large-v3")
+        compute_type = whisper_cfg.get("compute_type_gpu", "float16")
+    else:
+        model_name = whisper_cfg.get("cpu_model", "distil-large-v3")
+        compute_type = whisper_cfg.get("compute_type_cpu", "int8")
+    candidates = _resolve_languages(whisper_cfg)
+    total_s = len(audio) / sample_rate
+
+    log.info(
+        "transcribing on %s with %s (%s), batch_size=%d, languages=%s",
+        device, model_name, compute_type, batch_size, candidates or "auto",
+    )
+
+    model = None
+    try:
+        # Load with language=None so the tokenizer is rebuilt once the language is
+        # known (forced, auto-detected dominant, or WhisperX's own first-30s guess).
+        model = whisperx.load_model(
+            model_name, device, compute_type=compute_type, language=None
+        )
+
+        if candidates is None:
+            # Fully automatic: let WhisperX detect on the first 30s.
+            language = None
+        elif len(candidates) == 1:
+            # Forced / manual override -> skip detection entirely.
+            language = candidates[0]
+        else:
+            # Sample the whole file in windows and transcribe in the majority
+            # language. Detection is a cheap encoder pass relative to transcription.
+            n_windows = max(1, math.ceil(total_s / WINDOW_S))
+            window_langs = [
+                _detect_language(
+                    model,
+                    audio[int(i * WINDOW_S * sample_rate):
+                          int(min((i + 1) * WINDOW_S, total_s) * sample_rate)],
+                    candidates,
+                )
+                for i in range(n_windows)
+            ]
+            language = _dominant_language(window_langs, candidates[0])
+            log.info("dominant language: %s (windows: %s)", language, dict(Counter(window_langs)))
+
+        result = model.transcribe(audio, batch_size=batch_size, language=language)
+        segs = result.get("segments", [])
+        lang = result.get("language", language or "en")
+
+        try:
+            align_model, metadata = whisperx.load_align_model(
+                language_code=lang, device=device
+            )
+            if segs:
+                aligned = whisperx.align(
+                    segs, align_model, metadata, audio, device,
+                    return_char_alignments=False,
+                )
+                segs = aligned.get("segments", segs)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("alignment failed for %s (%s); coarse timestamps", lang, exc)
+
+        segments = [
+            {"start": float(s["start"]), "end": float(s["end"]), "text": s["text"].strip()}
+            for s in segs
+            if s.get("text", "").strip()
+        ]
+        segments.sort(key=lambda s: s["start"])
+        log.info("transcription produced %d segments in %s", len(segments), lang)
+        return segments
+    finally:
+        model = None
+        _free_gpu(device)
+
+
 def transcribe(audio_path: str, whisper_cfg: dict) -> list[dict]:
     """Transcribe `audio_path` and return word-aligned segments.
 
     Each segment: {"start": float, "end": float, "text": str}. Raises
     RuntimeError if whisperx is unavailable so the caller can fall back to a
-    captions-only transcript.
+    captions-only transcript. A CUDA out-of-memory error is recoverable: the GPU
+    is freed and the attempt retried at a smaller batch, then on CPU, before the
+    error finally propagates.
     """
     try:
         import whisperx
@@ -117,90 +229,25 @@ def transcribe(audio_path: str, whisper_cfg: dict) -> list[dict]:
             "whisperx not installed; run `uv sync --extra whisper`"
         ) from exc
 
-    device = detect_device()
-    if device == "cuda":
-        model_name = whisper_cfg.get("gpu_model", "large-v3")
-        compute_type = whisper_cfg.get("compute_type_gpu", "float16")
-    else:
-        model_name = whisper_cfg.get("cpu_model", "distil-large-v3")
-        compute_type = whisper_cfg.get("compute_type_cpu", "int8")
-    batch_size = int(whisper_cfg.get("batch_size", 16))
-    candidates = _resolve_languages(whisper_cfg)
-
-    log.info(
-        "transcribing on %s with %s (%s), languages=%s",
-        device, model_name, compute_type, candidates or "auto",
-    )
-
     audio = whisperx.load_audio(audio_path)
-    total_s = len(audio) / SAMPLE_RATE if len(audio) else 0.0
-    if total_s <= 0:
+    if not len(audio):
         log.warning("empty audio; nothing to transcribe")
         return []
 
-    # Load with language=None so the tokenizer is rebuilt per span and the
-    # detected language for each span actually takes effect.
-    model = whisperx.load_model(
-        model_name, device, compute_type=compute_type, language=None
-    )
+    batch_size = int(whisper_cfg.get("batch_size", 16))
+    plan = _attempt_plan(detect_device(), gpu_batch=batch_size, cpu_batch=batch_size)
 
-    # One language forced -> single span, no detection. Otherwise detect per
-    # window and group consecutive same-language windows.
-    if candidates is not None and len(candidates) == 1:
-        spans = [(0.0, total_s, candidates[0])]
-    else:
-        n_windows = max(1, math.ceil(total_s / WINDOW_S))
-        window_langs = [
-            _detect_language(
-                model,
-                audio[int(i * WINDOW_S * SAMPLE_RATE):
-                      int(min((i + 1) * WINDOW_S, total_s) * SAMPLE_RATE)],
-                candidates,
-            )
-            for i in range(n_windows)
-        ]
-        spans = _group_language_spans(window_langs, float(WINDOW_S), total_s)
-
-    log.info("language spans: %s", [(round(s, 1), round(e, 1), lang) for s, e, lang in spans])
-
-    align_cache: dict[str, tuple | None] = {}
-
-    def _aligner(lang: str):
-        if lang not in align_cache:
-            try:
-                align_cache[lang] = whisperx.load_align_model(
-                    language_code=lang, device=device
+    last_exc: Exception | None = None
+    for i, (device, batch) in enumerate(plan):
+        try:
+            return _run(whisperx, SAMPLE_RATE, audio, whisper_cfg, device, batch)
+        except RuntimeError as exc:
+            last_exc = exc
+            if _is_oom(exc) and i < len(plan) - 1:
+                log.warning(
+                    "out of memory on %s batch=%d; freeing GPU and retrying as %s",
+                    device, batch, plan[i + 1],
                 )
-            except Exception as exc:  # noqa: BLE001
-                log.warning("no alignment model for %s (%s); coarse timestamps", lang, exc)
-                align_cache[lang] = None
-        return align_cache[lang]
-
-    all_segments: list[dict] = []
-    for start, end, lang in spans:
-        chunk = audio[int(start * SAMPLE_RATE):int(end * SAMPLE_RATE)]
-        if len(chunk) == 0:
-            continue
-        result = model.transcribe(chunk, batch_size=batch_size, language=lang)
-        segs = result.get("segments", [])
-
-        am = _aligner(lang)
-        if am is not None and segs:
-            try:
-                aligned = whisperx.align(
-                    segs, am[0], am[1], chunk, device, return_char_alignments=False
-                )
-                segs = aligned.get("segments", segs)
-            except Exception as exc:  # noqa: BLE001
-                log.warning("alignment failed for %s span (%s); coarse timestamps", lang, exc)
-
-        all_segments.extend(_offset_segments(segs, start))
-
-    segments = [
-        {"start": float(s["start"]), "end": float(s["end"]), "text": s["text"].strip()}
-        for s in all_segments
-        if s.get("text", "").strip()
-    ]
-    segments.sort(key=lambda s: s["start"])
-    log.info("transcription produced %d segments across %d span(s)", len(segments), len(spans))
-    return segments
+                continue
+            raise
+    raise last_exc  # pragma: no cover - loop returns or raises above

@@ -22,12 +22,15 @@ _DEFAULTS: dict = {
         "cpu_model": "distil-large-v3",
         "compute_type_cpu": "int8",
         "batch_size": 16,
-        # Single forced language (e.g. "en"); when set it wins and disables
-        # multi-language detection. Leave None to use `languages` below.
+        # Single forced language (e.g. "en"); when set it wins and skips
+        # detection, transcribing the whole file in that language. Overridable at
+        # daemon startup via `--language pl`. Leave None to use `languages` below.
         "language": None,
-        # Candidate languages for per-window detection within one meeting
-        # (meetings here open in Polish then switch to English). Overridable at
-        # daemon startup via `--languages pl,en`. Empty/None => fully automatic.
+        # Allowlist constraining auto dominant-language detection: the file is
+        # sampled and transcribed once in the majority language among these
+        # (meetings here mix Polish and English). Overridable at daemon startup
+        # via `--languages pl,en`. Empty/None => fully automatic (WhisperX's
+        # first-30s guess).
         "languages": ["pl", "en"],
     },
     "align": {

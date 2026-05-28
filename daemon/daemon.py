@@ -162,22 +162,45 @@ def _parse_languages(value: str) -> list[str]:
     return codes
 
 
+def _parse_language(value: str) -> str:
+    """Parse a single two-letter language code (e.g. "pl")."""
+    code = value.strip().lower()
+    if not _LANG_CODE.match(code):
+        raise argparse.ArgumentTypeError(
+            f"expected a single two-letter code (e.g. pl), got {value!r}"
+        )
+    return code
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="local-recorder")
+    parser.add_argument(
+        "--language",
+        type=_parse_language,
+        metavar="pl",
+        help="force a single language for the whole meeting (two-letter code); "
+        "skips detection and overrides whisper.language",
+    )
     parser.add_argument(
         "--languages",
         type=_parse_languages,
         metavar="pl,en",
-        help="candidate languages for per-window detection (comma-separated "
+        help="allowlist for auto dominant-language detection (comma-separated "
         "two-letter codes); overrides whisper.languages",
     )
     args = parser.parse_args()
 
     cfg = load_config()
+    if args.language:
+        cfg["whisper"]["language"] = args.language
     if args.languages:
         cfg["whisper"]["languages"] = args.languages
     _setup_logging(Path(cfg["log_file"]).expanduser())
-    log.info("whisper languages: %s", cfg["whisper"].get("languages") or "auto")
+    forced = cfg["whisper"].get("language")
+    if forced:
+        log.info("whisper language: %s (forced)", forced)
+    else:
+        log.info("whisper languages: %s", cfg["whisper"].get("languages") or "auto")
     Daemon(cfg).run()
 
 

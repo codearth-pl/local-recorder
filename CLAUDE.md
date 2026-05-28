@@ -89,12 +89,14 @@ and does: stop ffmpeg → `transcribe.transcribe()` → `align.build_transcript(
 - `transcribe.py` — WhisperX, GPU-first (`large-v3`/float16) with CPU fallback
   (`distil-large-v3`/int8). `import whisperx`/`torch` are **lazy** so the daemon and tests run
   without the multi-GB ML stack; missing whisperx raises `RuntimeError` → caller falls back to
-  captions-only. **Per-window multi-language:** WhisperX natively detects language once (first
-  30 s) and locks the whole file; instead we detect language on ~30 s windows constrained to an
-  allowlist (`whisper.languages`, default `[pl, en]`, or `--languages pl,en`), group consecutive
-  same-language windows into spans, transcribe + align each span in its own language, and merge.
-  This handles meetings that start in Polish and switch to English. The pure helpers
-  (`_group_language_spans`, `_offset_segments`, `_resolve_languages`) are ML-free and unit-tested.
+  captions-only. **Dominant-language detection:** WhisperX is one-language-per-file (it locks to
+  its first-30 s guess). Meetings here mix Polish and English, so we sample the file in ~30 s
+  windows, detect each window's language constrained to an allowlist (`whisper.languages`,
+  default `[pl, en]`, or `--languages pl,en`), and transcribe the whole file **once** in the
+  majority ("dominant") language — a single native pass (no per-span splitting, which fragmented
+  utterances and hurt accuracy + alignment). A forced `whisper.language` (or `--language pl`)
+  skips detection. The pure helpers (`_dominant_language`, `_resolve_languages`) are ML-free and
+  unit-tested.
 - `align.py` — pure functions on plain dicts (hence unit-testable with no audio/ML). Converts
   caption turns to recording-relative seconds (shifting earlier by `caption_latency` to undo
   caption lag), stamps each Whisper segment with the speaker of the turn it overlaps most
