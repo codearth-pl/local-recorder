@@ -39,12 +39,18 @@
         '[data-tid="closed-captions-renderer"]',
         '[data-tid="closed-caption-v2-window"]',
       ],
+      // Match the whole message ROW (.fui-ChatMessageCompact), not the inner
+      // text wrapper ([data-tid="closed-caption-message"]) — the author node is
+      // a sibling of that wrapper, so matching the wrapper strands the speaker.
       lineSelector:
-        '[data-tid="closed-caption-message"], .ui-chat__item, .fui-ChatMessage',
+        '.fui-ChatMessageCompact, [class*="fui-ChatMessageCompact"], .fui-ChatMessage, [class*="fui-ChatMessage"], .ui-chat__item',
       speakerSelector:
-        '[data-tid="author"], .ui-chat__message__author, .fui-ChatMessage__author',
+        '[data-tid="author"], [class*="fui-ChatMessageCompact__author"], .fui-ChatMessage__author, .ui-chat__message__author',
       textSelector:
-        '[data-tid="closed-caption-text"], .ui-chat__message__content, .fui-ChatMessage__body',
+        '[data-tid="closed-caption-text"], [data-tid="closed-caption-message"], [class*="fui-ChatMessageCompact__body"], .fui-ChatMessage__body, .ui-chat__message__content',
+      // Ancestor row used by the core to find a speaker outside the line node.
+      rowSelector:
+        '.fui-ChatMessageCompact, [class*="fui-ChatMessageCompact"], .fui-ChatMessage, [class*="fui-ChatMessage"], .ui-chat__item',
       fallbackSpeaker: () => "Unknown",
     };
   }

@@ -10,6 +10,8 @@
 (function () {
   const LR = (window.__LR = window.__LR || {});
 
+  LR.debug = LR.debug || false; // set window.__LR.debug = true in DevTools console
+
   const POLL_MS = 700;
   const STABLE_MS = 1500; // emit a turn after this much silence/no-change
 
@@ -41,6 +43,8 @@
     //   lineSelector: string,                 // each speaker turn within container
     //   speakerSelector: string,              // name node within a line (optional)
     //   textSelector: string,                 // text node within a line (optional)
+    //   rowSelector: string,                  // ancestor row to find a speaker
+    //                                         //   node that lives outside the line (optional)
     //   fallbackSpeaker: () => string         // when no name node found
     // }
     constructor(cfg) {
@@ -64,7 +68,12 @@
     parseLine(node) {
       let speaker = "";
       if (this.cfg.speakerSelector) {
-        const sEl = node.querySelector(this.cfg.speakerSelector);
+        let sEl = node.querySelector(this.cfg.speakerSelector);
+        // Fallback: author may live on an ancestor row, not inside the line node.
+        if (!sEl && this.cfg.rowSelector) {
+          const row = node.closest(this.cfg.rowSelector);
+          if (row) sEl = row.querySelector(this.cfg.speakerSelector);
+        }
         if (sEl) speaker = cleanText(sEl);
       }
       let text;
@@ -87,6 +96,7 @@
     scan() {
       const container = firstMatch(this.cfg.containerSelectors);
       if (!container) return;
+      if (LR.debug) LR.dumpCaptions(this.cfg);
       const now = Date.now();
       const nodes = container.querySelectorAll(this.cfg.lineSelector);
       const seen = new Set();
@@ -142,6 +152,29 @@
   LR.sendToBackground = sendToBackground;
   LR.firstMatch = firstMatch;
   LR.cleanText = cleanText;
+
+  // Debug aid: dump the live caption DOM + per-line parse so selectors can be
+  // confirmed against a real call. Toggle with window.__LR.debug = true.
+  LR.dumpCaptions = function (cfg) {
+    const c = firstMatch(cfg.containerSelectors);
+    if (!c) {
+      console.log("[local-recorder][debug] no caption container matched", cfg.containerSelectors);
+      return;
+    }
+    console.log("[local-recorder][debug] container outerHTML:\n", c.outerHTML);
+    const nodes = c.querySelectorAll(cfg.lineSelector);
+    console.log("[local-recorder][debug] lineSelector matched", nodes.length, "node(s)");
+    nodes.forEach((n, i) => {
+      const s = cfg.speakerSelector && n.querySelector(cfg.speakerSelector);
+      const t = cfg.textSelector && n.querySelector(cfg.textSelector);
+      console.log(
+        `[local-recorder][debug] line ${i}: speaker=`,
+        s ? cleanText(s) : null,
+        " text=",
+        t ? cleanText(t) : cleanText(n)
+      );
+    });
+  };
 
   // Generic SPA meeting-lifecycle manager used by both platforms.
   // platformCfg: {
